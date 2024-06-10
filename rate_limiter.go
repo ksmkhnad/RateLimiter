@@ -8,7 +8,7 @@ import (
 type RateLimiter struct {
 	mu      sync.Mutex
 	limits  map[string]limit
-	windows map[string][]time.Time
+	windows map[string]*ringBuffer
 }
 
 type limit struct {
@@ -16,10 +16,44 @@ type limit struct {
 	duration time.Duration
 }
 
+type ringBuffer struct {
+	buffer []time.Time
+	size   int
+	start  int
+	end    int
+}
+
+func newRingBuffer(size int) *ringBuffer {
+	return &ringBuffer{
+		buffer: make([]time.Time, size),
+		size:   size,
+	}
+}
+
+func (rb *ringBuffer) add(t time.Time) {
+	rb.buffer[rb.end] = t
+	rb.end = (rb.end + 1) % rb.size
+	if rb.end == rb.start {
+		rb.start = (rb.start + 1) % rb.size
+	}
+}
+
+func (rb *ringBuffer) countWithin(duration time.Duration) int {
+	count := 0
+	now := time.Now()
+	for i := 0; i < rb.size; i++ {
+		index := (rb.start + i) % rb.size
+		if now.Sub(rb.buffer[index]) < duration {
+			count++
+		}
+	}
+	return count
+}
+
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
 		limits:  make(map[string]limit),
-		windows: make(map[string][]time.Time),
+		windows: make(map[string]*ringBuffer),
 	}
 }
 
@@ -27,7 +61,7 @@ func (r *RateLimiter) AddLimit(key string, count int, duration time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.limits[key] = limit{count, duration}
-	r.windows[key] = []time.Time{}
+	r.windows[key] = newRingBuffer(count)
 }
 
 func (r *RateLimiter) Allow(key string) bool {
@@ -39,22 +73,15 @@ func (r *RateLimiter) Allow(key string) bool {
 		return true
 	}
 
-	now := time.Now()
-	window := r.windows[key]
-
-	newWindow := []time.Time{}
-	for _, t := range window {
-		if now.Sub(t) < l.duration {
-			newWindow = append(newWindow, t)
-		}
-	}
-
-	if len(newWindow) < l.count {
-		newWindow = append(newWindow, now)
-		r.windows[key] = newWindow
+	window, exists := r.windows[key]
+	if !exists {
 		return true
 	}
 
-	r.windows[key] = newWindow
+	if window.countWithin(l.duration) < l.count {
+		window.add(time.Now())
+		return true
+	}
+
 	return false
 }
