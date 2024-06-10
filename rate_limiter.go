@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 )
+
 type RateLimiter struct {
 	mu      sync.Mutex
 	limits  map[string]limit
