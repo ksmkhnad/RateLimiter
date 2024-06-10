@@ -4,7 +4,6 @@ import (
 	"sync"
 	"time"
 )
-
 type RateLimiter struct {
 	mu      sync.Mutex
 	limits  map[string]limit
@@ -42,7 +41,6 @@ func (r *RateLimiter) Allow(key string) bool {
 	now := time.Now()
 	window := r.windows[key]
 
-	// Remove expired timestamps
 	newWindow := []time.Time{}
 	for _, t := range window {
 		if now.Sub(t) < l.duration {
@@ -50,7 +48,6 @@ func (r *RateLimiter) Allow(key string) bool {
 		}
 	}
 
-	// Check if we can allow a new request
 	if len(newWindow) < l.count {
 		newWindow = append(newWindow, now)
 		r.windows[key] = newWindow
