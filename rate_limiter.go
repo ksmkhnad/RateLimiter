@@ -78,10 +78,23 @@ func (r *RateLimiter) Allow(key string) bool {
 		return true
 	}
 
+	now := time.Now()
+	elapsed := now.Sub(window.buffer[window.start])
+
+	if elapsed >= l.duration {
+		for i := range window.buffer {
+			window.buffer[i] = now
+		}
+		window.start = 0
+		window.end = 0
+		return true
+	}
+
 	if window.countWithin(l.duration) < l.count {
-		window.add(time.Now())
+		window.add(now)
 		return true
 	}
 
 	return false
 }
+
