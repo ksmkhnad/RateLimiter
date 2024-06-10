@@ -6,9 +6,9 @@ import (
 )
 
 type RateLimiter struct {
-	mu          sync.Mutex
-	limits      map[string]limit
-	timeWindows map[string][]time.Time
+	mu      sync.Mutex
+	limits  map[string]limit
+	windows map[string]*timeWindow
 }
 
 type limit struct {
@@ -16,10 +16,17 @@ type limit struct {
 	duration time.Duration
 }
 
+type timeWindow struct {
+	times []time.Time
+	start int
+	end   int
+	size  int
+}
+
 func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
-		limits:      make(map[string]limit),
-		timeWindows: make(map[string][]time.Time),
+		limits:  make(map[string]limit),
+		windows: make(map[string]*timeWindow),
 	}
 }
 
@@ -27,33 +34,41 @@ func (r *RateLimiter) AddLimit(key string, count int, duration time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.limits[key] = limit{count, duration}
+	r.windows[key] = &timeWindow{
+		times: make([]time.Time, count),
+		size:  count,
+	}
 }
 
 func (r *RateLimiter) Allow(key string) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	lim, exists := r.limits[key]
+	window, winExists := r.windows[key]
+	r.mu.Unlock()
 
-	l, exists := r.limits[key]
-	if !exists {
+	if !exists || !winExists {
 		return true
 	}
 
 	now := time.Now()
-	window := r.timeWindows[key]
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	newWindow := []time.Time{}
-	for _, t := range window {
-		if now.Sub(t) < l.duration {
-			newWindow = append(newWindow, t)
+	// Remove expired timestamps
+	for i := 0; i < window.size; i++ {
+		if now.Sub(window.times[window.start]) < lim.duration {
+			break
 		}
+		window.start = (window.start + 1) % window.size
+		window.end = (window.end + 1) % window.size
 	}
 
-	if len(newWindow) < l.count {
-		newWindow = append(newWindow, now)
-		r.timeWindows[key] = newWindow
+	// Check if we can allow a new request
+	if (window.end+1)%window.size != window.start {
+		window.times[window.end] = now
+		window.end = (window.end + 1) % window.size
 		return true
 	}
 
-	r.timeWindows[key] = newWindow
 	return false
 }
