@@ -5,96 +5,50 @@ import (
 	"time"
 )
 
-type RateLimiter struct {
-	mu      sync.Mutex
-	limits  map[string]limit
-	windows map[string]*ringBuffer
+type TokenBucket struct {
+	key      string
+	tokens   int
+	interval time.Duration
+	bucket   chan struct{}
+	mu       sync.Mutex
 }
 
-type limit struct {
-	count    int
-	duration time.Duration
-}
-
-type ringBuffer struct {
-	buffer []time.Time
-	size   int
-	start  int
-	end    int
-}
-
-func newRingBuffer(size int) *ringBuffer {
-	return &ringBuffer{
-		buffer: make([]time.Time, size),
-		size:   size,
+func NewTokenBucket(key string, tokens int, interval time.Duration) *TokenBucket {
+	tb := &TokenBucket{
+		key:      key,
+		tokens:   tokens,
+		interval: interval,
+		bucket:   make(chan struct{}, tokens),
 	}
-}
 
-func (rb *ringBuffer) add(t time.Time) {
-	rb.buffer[rb.end] = t
-	rb.end = (rb.end + 1) % rb.size
-	if rb.end == rb.start {
-		rb.start = (rb.start + 1) % rb.size
+	for i := 0; i < tokens; i++ {
+		tb.bucket <- struct{}{}
 	}
+
+	go tb.refill()
+
+	return tb
 }
 
-func (rb *ringBuffer) countWithin(duration time.Duration) int {
-	count := 0
-	now := time.Now()
-	for i := 0; i < rb.size; i++ {
-		index := (rb.start + i) % rb.size
-		if now.Sub(rb.buffer[index]) < duration {
-			count++
+func (tb *TokenBucket) refill() {
+	ticker := time.NewTicker(time.Second)
+	for range ticker.C {
+		tb.mu.Lock()
+		if len(tb.bucket) < tb.tokens {
+			tb.bucket <- struct{}{}
 		}
-	}
-	return count
-}
-
-func NewRateLimiter() *RateLimiter {
-	return &RateLimiter{
-		limits:  make(map[string]limit),
-		windows: make(map[string]*ringBuffer),
+		tb.mu.Unlock()
 	}
 }
 
-func (r *RateLimiter) AddLimit(key string, count int, duration time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.limits[key] = limit{count, duration}
-	r.windows[key] = newRingBuffer(count)
+func (tb *TokenBucket) Allow() bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	select {
+	case <-tb.bucket:
+		return true
+	default:
+		return false
+	}
 }
-
-func (r *RateLimiter) Allow(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	l, exists := r.limits[key]
-	if !exists {
-		return true
-	}
-
-	window, exists := r.windows[key]
-	if !exists {
-		return true
-	}
-
-	now := time.Now()
-	elapsed := now.Sub(window.buffer[window.start])
-
-	if elapsed >= l.duration {
-		for i := range window.buffer {
-			window.buffer[i] = now
-		}
-		window.start = 0
-		window.end = 0
-		return true
-	}
-
-	if window.countWithin(l.duration) < l.count {
-		window.add(now)
-		return true
-	}
-
-	return false
-}
-
