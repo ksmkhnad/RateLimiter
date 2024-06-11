@@ -12,24 +12,45 @@ go get github.com/ksmkhnad/RateLimiter
 package main
 
 import (
-	"fmt"
 	"time"
 
 	ratelimiter "github.com/ksmkhnad/RateLimiter"
 )
 
 func main() {
-	rl := ratelimiter.NewRateLimiter()
-	rl.AddLimit("login:user:123", 5, time.Second)
-	rl.AddLimit("login:ip:192.168.1.1", 10000, time.Minute)
-	rl.AddLimit("txn:card:123", 3, 24*time.Hour)
+	// Пользователь может отправлять не более 5 сообщений в секунду
+	userLimiter := ratelimiter.NewTokenBucket("user", 5, time.Second)
+
+	// Один IP-адрес может отправлять не более 10000 запросов в минуту
+	ipLimiter := ratelimiter.NewTokenBucket("ip", 10000, time.Minute)
+
+	// Юзер может иметь не более 3-х неудачных транзакций по карте в день
+	cardLimiter := ratelimiter.NewTokenBucket("card", 3, 24*time.Hour)
 
 	for i := 0; i < 10; i++ {
-		if rl.Allow("login:user:123") {
-			fmt.Println("User login allowed")
+		if userLimiter.Allow() {
+			println("User message allowed")
 		} else {
-			fmt.Println("User login rate limit exceeded")
+			println("User message not allowed")
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	for i := 0; i < 20000; i++ {
+		if ipLimiter.Allow() {
+			println("IP request allowed")
+		} else {
+			println("IP request not allowed")
+		}
+		time.Sleep(3 * time.Millisecond)
+	}
+	
+	for i := 0; i < 5; i++ {
+		if cardLimiter.Allow() {
+			println("Card transaction allowed")
+		} else {
+			println("Card transaction not allowed")
+		}
+		time.Sleep(10 * time.Second)
 	}
 }
